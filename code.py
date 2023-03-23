@@ -14,7 +14,7 @@ import terminalio
 from adafruit_display_shapes.rect import Rect
 from adafruit_display_text import label
 from adafruit_macropad import MacroPad
-
+from adafruit_hid.keycode import Keycode
 
 # CONFIGURABLES ------------------------
 
@@ -131,17 +131,26 @@ last_position = None
 last_encoder_switch = macropad.encoder_switch_debounced.pressed
 app_index = 0
 apps[app_index].switch()
-
+last_sequence = []
+isEncoderScrollMode  = False
 
 # MAIN LOOP ----------------------------
 
 while True:
     # Read encoder position. If it's changed, switch apps.
     position = macropad.encoder
+
+    # If treating encoder as scroller, then map encoder rotation to Up/Down arrow movement(s)
+    scrollDelta = 0 if last_position is None else last_position - position
+
     if position != last_position:
-        app_index = position % len(apps)
-        apps[app_index].switch()
-        last_position = position
+        if isEncoderScrollMode:
+            scrollDelta = min(5, max(-5, last_position - position))
+        else:
+            app_index = position % len(apps)
+            apps[app_index].switch()
+            
+    last_position = position
 
     # Handle encoder button. If state has changed, and if there's a
     # corresponding macro, set up variables to act on this just like
@@ -149,11 +158,24 @@ while True:
     macropad.encoder_switch_debounced.update()
     encoder_switch = macropad.encoder_switch_debounced.pressed
     if encoder_switch != last_encoder_switch:
+
+        # No 13th macro explicitly defined, so transition encoder to Up/Down 'Scroll mode'
+        if len(apps[app_index].macros) < 13 and last_encoder_switch != encoder_switch:
+            isEncoderScrollMode = not isEncoderScrollMode
+            if (isEncoderScrollMode):
+                group[13].text = 'Scroll Mode'
+                macropad.display.refresh()
+            else:
+                apps[app_index].switch()
+
+            continue
+
         last_encoder_switch = encoder_switch
-        if len(apps[app_index].macros) < 13:
-            continue    # No 13th macro, just resume main loop
+
         key_number = 12 # else process below as 13th macro
         pressed = encoder_switch
+    elif isEncoderScrollMode:
+        key_number = 1
     else:
         event = macropad.keys.events.get()
         if not event or event.key_number >= len(apps[app_index].macros):
@@ -165,10 +187,22 @@ while True:
     # and there IS a corresponding macro available for it...other situations
     # are avoided by 'continue' statements above which resume the loop.
 
-    sequence = apps[app_index].macros[key_number][2]
+    if isEncoderScrollMode:
+        if scrollDelta > 0:
+            sequence = [Keycode.UP_ARROW, -Keycode.UP_ARROW] * 3 * scrollDelta
+            pressed = True
+        elif scrollDelta < 0:
+            sequence = [Keycode.DOWN_ARROW, -Keycode.DOWN_ARROW] * 3 * abs(scrollDelta)
+            pressed = True
+        else:
+            sequence = last_sequence
+            pressed = False
+    else:
+        sequence = apps[app_index].macros[key_number][2]
+
     if pressed:
         if key_number < 12: # No pixel for encoder button
-            macropad.pixels[key_number] = 0xFFFFFF
+            macropad.pixels[key_number] = 0x000000
             macropad.pixels.show()
         for item in sequence:
             if isinstance(item, int):
@@ -186,3 +220,5 @@ while True:
         if key_number < 12: # No pixel for encoder button
             macropad.pixels[key_number] = apps[app_index].macros[key_number][0]
             macropad.pixels.show()
+
+    last_sequence = sequence
